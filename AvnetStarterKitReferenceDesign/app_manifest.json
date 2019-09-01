@@ -1,11 +1,11 @@
 {
   "SchemaVersion": 1,
-  "Name": "Avnet-Starter-Kit-reference-V1.0",
+  "Name": "DryerMonitor",
   "ComponentId": "685f13af-25a5-40b2-8dd8-8cbc253ecbd8",
   "EntryPoint": "/bin/app",
-  "CmdArgs": [ "Avnet-Starter-Kit-reference-V1.0" ],
+  "CmdArgs": [ "DryerMonitor" ],
   "Capabilities": {
-    "AllowedConnections": [],
+    "AllowedConnections": [ "iotc-9212fb2b-74b1-4bcf-bd3f-856af04040e4.azure-devices.net" ],
     "AllowedTcpServerPorts": [],
     "AllowedUdpServerPorts": [],
     "Gpio": [ 0, 4, 5, 8, 9, 10, 12, 13, 34 ],
