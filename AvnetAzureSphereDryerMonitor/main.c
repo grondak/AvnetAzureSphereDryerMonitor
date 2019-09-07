@@ -219,7 +219,7 @@ static int InitPeripheralsAndHandlers(void)
         return -1;
     }
 
-	if (initI2c() == -1) {
+	if (setupDeviceAndStartPolling() == -1) {
 		return -1;
 	}
 	

@@ -64,7 +64,7 @@ static float pressure_hPa;
 static float lps22hhTemperature_degC;
 
 static uint8_t whoamI, rst;
-static int accelTimerFd = -1;
+static int devicePollTimerFd = -1;
 const uint8_t lsm6dsOAddress = LSM6DSO_ADDRESS;     // Addr = 0x6A
 lsm6dso_ctx_t dev_ctx;
 lps22hh_ctx_t pressure_ctx;
@@ -97,20 +97,60 @@ void HAL_Delay(int delayTime) {
 /// <summary>
 ///     Print latest data from on-board sensors.
 /// </summary>
-void AccelTimerEventHandler(EventData *eventData)
+void DeviceEventHandler(EventData* eventData)
 {
-	uint8_t reg;
-	lps22hh_reg_t lps22hhReg;
-
-#if (defined(IOT_CENTRAL_APPLICATION) || defined(IOT_HUB_APPLICATION))
-	static bool firstPass = true;
-#endif
+	i2c_telemetry i2c_received;
 	// Consume the event.  If we don't do this we'll come right back 
 	// to process the same event again
-	if (ConsumeTimerFdEvent(accelTimerFd) != 0) {
+	if (ConsumeTimerFdEvent(devicePollTimerFd) != 0) {
 		terminationRequired = true;
 		return;
 	}
+	i2c_received = i2cPoll();
+	ReportTelemetry(i2c_received);
+}
+
+void ReportTelemetry(i2c_telemetry receivedData) {
+#if (defined(IOT_CENTRAL_APPLICATION) || defined(IOT_HUB_APPLICATION))
+	static bool firstPass = true;
+	// We've seen that the first read of the Accelerometer data is garbage.  If this is the first pass
+	// reading data, don't report it to Azure.  Since we're graphing data in Azure, this data point
+	// will skew the data.
+	if (!firstPass) {
+
+		// Allocate memory for a telemetry message to Azure
+		char* pjsonBuffer = (char*)malloc(JSON_BUFFER_SIZE);
+		if (pjsonBuffer == NULL) {
+			Log_Debug("ERROR: not enough memory to send telemetry");
+		}
+
+		// construct the telemetry message
+		snprintf(pjsonBuffer, JSON_BUFFER_SIZE, "{\"gX\":\"%.4lf\", \"gY\":\"%.4lf\", \"gZ\":\"%.4lf\", \"pressure\": \"%.2f\", \"temp\": \"%.2f\", \"temp2\": \"%.2f\",\"aX\": \"%4.2f\", \"aY\": \"%4.2f\", \"aZ\": \"%4.2f\"}",
+			receivedData.acceleration_mg[0], 
+			receivedData.acceleration_mg[1], 
+			receivedData.acceleration_mg[2], 
+			receivedData.pressure_hPa, 
+			receivedData.lps22hhTemperature_degC, 
+			receivedData.lsm6dsoTemperature_degC, 
+			receivedData.angular_rate_dps[0], 
+			receivedData.angular_rate_dps[1], 
+			receivedData.angular_rate_dps[2]);
+
+		Log_Debug("\n[Info] Sending telemetry: %s\n", pjsonBuffer);
+		AzureIoT_SendMessage(pjsonBuffer);
+		free(pjsonBuffer);
+
+	}
+
+	firstPass = false;
+
+#endif 
+}
+
+i2c_telemetry i2cPoll(void) {
+	uint8_t reg;
+	lps22hh_reg_t lps22hhReg;
+	i2c_telemetry report;
 
 	// Read the sensors on the lsm6dso device
 
@@ -178,33 +218,16 @@ void AccelTimerEventHandler(EventData *eventData)
 		Log_Debug("LPS22HH: Pressure     [hPa] : %.2f\r\n", pressure_hPa);
 		Log_Debug("LPS22HH: Temperature  [degC]: %.2f\r\n", lps22hhTemperature_degC);
 	}
-
-#if (defined(IOT_CENTRAL_APPLICATION) || defined(IOT_HUB_APPLICATION))
-
-	// We've seen that the first read of the Accelerometer data is garbage.  If this is the first pass
-	// reading data, don't report it to Azure.  Since we're graphing data in Azure, this data point
-	// will skew the data.
-	if (!firstPass) {
-
-		// Allocate memory for a telemetry message to Azure
-		char *pjsonBuffer = (char *)malloc(JSON_BUFFER_SIZE);
-		if (pjsonBuffer == NULL) {
-			Log_Debug("ERROR: not enough memory to send telemetry");
-		}
-
-		// construct the telemetry message
-		snprintf(pjsonBuffer, JSON_BUFFER_SIZE, "{\"gX\":\"%.4lf\", \"gY\":\"%.4lf\", \"gZ\":\"%.4lf\", \"pressure\": \"%.2f\", \"temp\": \"%.2f\", \"temp2\": \"%.2f\",\"aX\": \"%4.2f\", \"aY\": \"%4.2f\", \"aZ\": \"%4.2f\"}",
-			acceleration_mg[0], acceleration_mg[1], acceleration_mg[2], pressure_hPa, lps22hhTemperature_degC, lsm6dsoTemperature_degC, angular_rate_dps[0], angular_rate_dps[1], angular_rate_dps[2]);
-
-		Log_Debug("\n[Info] Sending telemetry: %s\n", pjsonBuffer);
-		AzureIoT_SendMessage(pjsonBuffer);
-		free(pjsonBuffer);
-
-}
-
-	firstPass = false;
-
-#endif 
+	report.acceleration_mg[0] = acceleration_mg[0];
+	report.acceleration_mg[1] = acceleration_mg[1];
+	report.acceleration_mg[2] = acceleration_mg[2];
+	report.angular_rate_dps[0] = angular_rate_dps[0];
+	report.angular_rate_dps[1] = angular_rate_dps[1];
+	report.angular_rate_dps[2] = angular_rate_dps[2];
+	report.lsm6dsoTemperature_degC = lsm6dsoTemperature_degC;
+	report.pressure_hPa = pressure_hPa;
+	report.lps22hhTemperature_degC = lps22hhTemperature_degC;
+	return report;
 
 }
 
@@ -364,14 +387,29 @@ int initI2c(void) {
 	Log_Debug("LSM6DSO: Calibrating angular rate complete!\n");
 
 
-	// Init the epoll interface to periodically run the AccelTimerEventHandler routine where we read the sensors
+	return 0;
+}
+
+int setupDeviceAndStartPolling(void)
+{	// set up your hardware here
+	// include a call to each initialization routine you need
+	// you might need only one if you use only the native devices
+
+	// this is just for the native I2C interfaces
+	if (initI2c() < 0) {
+		return -1;
+	}
+
+	// your other devices would be initialized here
+
+	// Init the epoll interface to periodically run the DeviceEventHandler routine where we read the sensors
 
 	// Define the period in the build_options.h file
-	struct timespec accelReadPeriod = { .tv_sec = ACCEL_READ_PERIOD_SECONDS,.tv_nsec = ACCEL_READ_PERIOD_NANO_SECONDS };
+	struct timespec devicePollPeriod = { .tv_sec = DEVICE_POLL_PERIOD_SECONDS,.tv_nsec = DEVICE_POLL_PERIOD_NANO_SECONDS };
 	// event handler data structures. Only the event handler field needs to be populated.
-	static EventData accelEventData = { .eventHandler = &AccelTimerEventHandler };
-	accelTimerFd = CreateTimerFdAndAddToEpoll(epollFd, &accelReadPeriod, &accelEventData, EPOLLIN);
-	if (accelTimerFd < 0) {
+	static EventData deviceEventData = { .eventHandler = &DeviceEventHandler };
+	devicePollTimerFd = CreateTimerFdAndAddToEpoll(epollFd, &devicePollPeriod, &deviceEventData, EPOLLIN);
+	if (devicePollTimerFd < 0) {
 		return -1;
 	}
 
@@ -384,7 +422,7 @@ int initI2c(void) {
 void closeI2c(void) {
 
 	CloseFdAndPrintError(i2cFd, "i2c");
-	CloseFdAndPrintError(accelTimerFd, "accelTimer");
+	CloseFdAndPrintError(devicePollTimerFd, "accelTimer");
 }
 
 /// <summary>
