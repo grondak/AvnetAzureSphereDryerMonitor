@@ -36,8 +36,8 @@ extern int userLedBlueFd;
 
 extern int appLedFd;
 extern int wifiLedFd;
-extern int clickSocket1Relay1Fd;
-extern int clickSocket1Relay2Fd;
+extern int clickSocket2Relay1Fd;
+extern int clickSocket2Relay2Fd;
 
 extern volatile sig_atomic_t terminationRequired;
 
@@ -67,8 +67,8 @@ twin_t twinArray[] = {
 	{.twinKey = "userLedBlue",.twinVar = &userLedBlueIsOn,.twinFd = &userLedBlueFd,.twinGPIO = MT3620_RDB_LED1_BLUE,.twinType = TYPE_BOOL,.active_high = false},
 	{.twinKey = "appLed",.twinVar = &appLedIsOn,.twinFd = &appLedFd,.twinGPIO = AVT_LED_APP,.twinType = TYPE_BOOL,.active_high = false},
 	{.twinKey = "wifiLed",.twinVar = &wifiLedIsOn,.twinFd = &wifiLedFd,.twinGPIO = AVT_LED_WIFI,.twinType = TYPE_BOOL,.active_high = false},
-	{.twinKey = "clickBoardRelay1",.twinVar = &clkBoardRelay1IsOn,.twinFd = &clickSocket1Relay1Fd,.twinGPIO = AVT_SK_CM1_CS,.twinType = TYPE_BOOL,.active_high = true},
-	{.twinKey = "clickBoardRelay2",.twinVar = &clkBoardRelay2IsOn,.twinFd = &clickSocket1Relay2Fd,.twinGPIO = AVT_SK_CM1_PWM,.twinType = TYPE_BOOL,.active_high = true}};
+	{.twinKey = "clickBoardRelay1",.twinVar = &clkBoardRelay1IsOn,.twinFd = &clickSocket2Relay1Fd,.twinGPIO = AVT_SK_CM2_CS,.twinType = TYPE_BOOL,.active_high = true},
+	{.twinKey = "clickBoardRelay2",.twinVar = &clkBoardRelay2IsOn,.twinFd = &clickSocket2Relay2Fd,.twinGPIO = AVT_SK_CM2_PWM,.twinType = TYPE_BOOL,.active_high = true}};
 
 // Calculate how many twin_t items are in the array.  We use this to iterate through the structure.
 int twinArraySize = sizeof(twinArray) / sizeof(twin_t);

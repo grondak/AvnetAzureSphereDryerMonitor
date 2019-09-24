@@ -69,6 +69,11 @@ const uint8_t lsm6dsOAddress = LSM6DSO_ADDRESS;     // Addr = 0x6A
 lsm6dso_ctx_t dev_ctx;
 lps22hh_ctx_t pressure_ctx;
 
+// lint sensor
+static GPIO_Value_Type ledState = GPIO_Value_High;
+static GPIO_Value_Type sensorState = GPIO_Value_High;
+static GPIO_Value_Type lastSensorState = GPIO_Value_High;
+
 //Extern variables
 int i2cFd = -1;
 extern int epollFd;
@@ -100,6 +105,7 @@ void HAL_Delay(int delayTime) {
 void DeviceEventHandler(EventData* eventData)
 {
 	i2c_telemetry i2c_received;
+	lint_telemetry lint_received;
 	// Consume the event.  If we don't do this we'll come right back 
 	// to process the same event again
 	if (ConsumeTimerFdEvent(devicePollTimerFd) != 0) {
@@ -107,10 +113,11 @@ void DeviceEventHandler(EventData* eventData)
 		return;
 	}
 	i2c_received = i2cPoll();
-	ReportTelemetry(i2c_received);
+	lint_received = sense_lint();
+	ReportTelemetry(i2c_received, lint_received);
 }
 
-void ReportTelemetry(i2c_telemetry receivedData) {
+void ReportTelemetry(i2c_telemetry receivedData, lint_telemetry lintData) {
 #if (defined(IOT_CENTRAL_APPLICATION) || defined(IOT_HUB_APPLICATION))
 	static bool firstPass = true;
 	// We've seen that the first read of the Accelerometer data is garbage.  If this is the first pass
@@ -125,7 +132,7 @@ void ReportTelemetry(i2c_telemetry receivedData) {
 		}
 
 		// construct the telemetry message
-		snprintf(pjsonBuffer, JSON_BUFFER_SIZE, "{\"gX\":\"%.4lf\", \"gY\":\"%.4lf\", \"gZ\":\"%.4lf\", \"pressure\": \"%.2f\", \"temp\": \"%.2f\", \"temp2\": \"%.2f\",\"aX\": \"%4.2f\", \"aY\": \"%4.2f\", \"aZ\": \"%4.2f\"}",
+		snprintf(pjsonBuffer, JSON_BUFFER_SIZE, "{\"gX\":\"%.4lf\", \"gY\":\"%.4lf\", \"gZ\":\"%.4lf\", \"pressure\": \"%.2f\", \"temp\": \"%.2f\", \"temp2\": \"%.2f\",\"aX\": \"%4.2f\", \"aY\": \"%4.2f\", \"aZ\": \"%4.2f\", \"lint\": \"%d\"}",
 			receivedData.acceleration_mg[0], 
 			receivedData.acceleration_mg[1], 
 			receivedData.acceleration_mg[2], 
@@ -134,7 +141,8 @@ void ReportTelemetry(i2c_telemetry receivedData) {
 			receivedData.lsm6dsoTemperature_degC, 
 			receivedData.angular_rate_dps[0], 
 			receivedData.angular_rate_dps[1], 
-			receivedData.angular_rate_dps[2]);
+			receivedData.angular_rate_dps[2],
+			lintData.input);
 
 		Log_Debug("\n[Info] Sending telemetry: %s\n", pjsonBuffer);
 		AzureIoT_SendMessage(pjsonBuffer);
@@ -145,6 +153,55 @@ void ReportTelemetry(i2c_telemetry receivedData) {
 	firstPass = false;
 
 #endif 
+}
+
+lint_telemetry sense_lint() {
+	lint_telemetry report;
+	// flip the LED state
+	ledState = (ledState == GPIO_Value_Low ? GPIO_Value_High : GPIO_Value_Low);
+	int result = GPIO_SetValue(lintInfraredLedGpioFd, ledState);
+	if (result != 0) {
+		Log_Debug("ERROR: Could not set LED output value: %s (%d).\n", strerror(errno), errno);
+		terminationRequired = true;
+	}
+	report.input = GPIO_Value_Low;
+	// if we turned on the LED, sense the LED
+	if (ledState == GPIO_Value_High) {
+		if (GPIO_GetValue(lintInfraredSensorGpioFd, &report.input) != 0) {
+			Log_Debug("ERROR: Could not read LED output value: %s (%d).\n", strerror(errno), errno);
+			terminationRequired = true;
+			report.input = GPIO_Value_Low;
+		}
+		else {
+			// the connection to the circuit board is inverted, so flip the value
+			report.input = report.input == GPIO_Value_High ? GPIO_Value_Low : GPIO_Value_High;
+			lastSensorState = report.input;
+			Log_Debug("Perfect! Sensed input is: %d.\n", report.input);
+		}
+	}
+	else { // didn't read the input, return what we knew last time
+		report.input = lastSensorState;
+	}
+	return report;
+}
+
+int initLint(void)
+{
+	// Open Lint Sensor Infrared Light GPIO on mikroBus 1 connector, set as output with value GPIO_Value_High (off)
+	Log_Debug("Opening GPIO for output on mikroBus 1 connector.\n");
+	lintInfraredLedGpioFd = GPIO_OpenAsOutput(AVT_MODULE_GPIO0_PWM0, GPIO_OutputMode_PushPull, GPIO_Value_High);
+	if (lintInfraredLedGpioFd < 0) {
+		Log_Debug("ERROR: Could not open AVT_MODULE_GPIO0_PWM0 GPIO: %s (%d).\n", strerror(errno), errno);
+		return -1;
+	}
+
+	// Open Lint Sensor GPIO on mikroBus 1 connector, set as output with value GPIO_Value_High (off)
+	Log_Debug("Opening GPIO for input on mikroBus 1 connector.\n");
+	lintInfraredSensorGpioFd = GPIO_OpenAsInput(AVT_MODULE_GPIO2_PWM2);
+	if (lintInfraredSensorGpioFd < 0) {
+		Log_Debug("ERROR: Could not open AVT_MODULE_GPIO2_PWM2 GPIO: %s (%d).\n", strerror(errno), errno);
+		return -1;
+	}
 }
 
 i2c_telemetry i2cPoll(void) {
@@ -390,11 +447,17 @@ int initI2c(void) {
 	return 0;
 }
 
+
+
 int setupDeviceAndStartPolling(void)
 {	// set up your hardware here
 	// include a call to each initialization routine you need
 	// you might need only one if you use only the native devices
 
+
+	if (initLint() < 0) {
+		return -1;
+	}
 	// this is just for the native I2C interfaces
 	if (initI2c() < 0) {
 		return -1;
